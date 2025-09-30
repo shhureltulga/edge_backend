@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * -------------------- Enums --------------------
+ */
+enum ReadingType {
+  temperature
+  humidity
+  energy_kwh
+  cost_mnt
+  heart_rate
+  co2
+  voc
+  noise
+  light
+  custom
+}
+
+enum SyncDirection {
+  outbound
+  inbound
+}
+
+enum SyncStatus {
+  queued
+  sending
+  sent
+  acked
+  failed
+}
+
+enum EdgeCmdStatus {
+  queued
+  processing
+  done
+  error
+}
+
+/**
+ * -------------------- Edge Identity / Config --------------------
+ */
+model EdgeIdentity {
+  id             String    @id @default(uuid()) // Edge ID (энэ NAS/Hub-ийн UUID)
+  householdId    String? // Main дээрх household ID (шалгалтад хэрэгтэй)
+  siteId         String? // Байшин/Site ID (main загвартай нийцнэ)
+  name           String? // Хүний ойлгох нэр (e.g. "Хотын байр NAS")
+  mainBaseUrl    String? // Main Backend URL
+  sharedSecret   String? // Түр хувилбар: plaintext эсвэл KDF хийсэн нууц (prod-д JWT-г илүүд үз)
+  jwtAccessToken String? // Хэрэв JWT ашиглавал энд хадгалж болно (refresh-г Edge-д хадгалуулахгүйгээр)
+  tokenExpiresAt DateTime?
+  lastSyncAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+/**
+ * Тохиргооны энгийн KV store
+ */
+model EdgeConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/**
+ * -------------------- Sensors (history + latest) --------------------
+ */
+/**
+ * Түүхэн уншилт
+ */
+model EdgeSensorReading {
+  id        String      @id @default(uuid())
+  edgeId    String // энэ VPS дэх hub-ийн ID (EdgeIdentity.id)
+  deviceKey String // "demo_hub_01_temp" / "temp" гэх мэт
+  type      ReadingType
+  value     Float
+  ts        DateTime    @default(now()) // мэдрэгчийн цаг (ирсэн payload-аас)
+  createdAt DateTime    @default(now()) // DB-д бичигдсэн цаг
+
+  // Синк туслах талбарууд
+  synced    Boolean @default(false) // main руу явуулсан эсэх
+  syncBatch String? // outbox багцын ID (optional)
+
+  @@index([edgeId, ts])
+  @@index([edgeId, deviceKey, ts])
+  @@index([synced, ts])
+  @@index([syncBatch])
+}
+
+/**
+ * Сүүлийн утгууд (кэш)
+ */
+model LatestEdgeSensor {
+  id        String      @id @default(uuid())
+  edgeId    String
+  deviceKey String
+  type      ReadingType
+  value     Float
+  ts        DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@unique([edgeId, deviceKey]) // нэг Edge дээр нэг түлхүүрийн ганц мөр
+  @@index([edgeId, updatedAt])
+}
+
+/**
+ * -------------------- Sync (Outbox + Log) --------------------
+ */
+/**
+ * Outbox: Main руу илгээх найдвартай дамжуулалт.
+ * kind: ingest|heartbeat|commandAck|custom
+ */
+model EdgeOutbox {
+  id            String     @id @default(uuid())
+  kind          String
+  payload       Json
+  status        SyncStatus @default(queued)
+  tryCount      Int        @default(0)
+  nextAttemptAt DateTime? // backoff хийхэд
+  lastError     String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([createdAt])
+}
+
+/**
+ * Явцын log
+ */
+model EdgeSyncLog {
+  id        String        @id @default(uuid())
+  direction SyncDirection
+  status    SyncStatus
+  message   String?
+  meta      Json?
+  createdAt DateTime      @default(now())
+
+  @@index([direction, createdAt])
+  @@index([status, createdAt])
+}
+
+/**
+ * -------------------- Commands (Inbox) --------------------
+ */
+/**
+ * Main-ээс ирэх командын inbox
+ */
+model EdgeCommand {
+  id            String        @id @default(uuid())
+  payload       Json
+  status        EdgeCmdStatus @default(queued)
+  error         String?
+  createdAt     DateTime      @default(now())
+  processedAt   DateTime?
+  correlationId String? // main талын command id тайлбарлахад
+
+  @@index([status, createdAt])
+  @@index([correlationId])
+}

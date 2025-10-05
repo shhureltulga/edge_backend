@@ -9,10 +9,13 @@ import {
   fetchCommands,
   ackCommand,
 } from './services/mainClient';
+import { startHaSyncWorker } from './services/haSync';
+
 const prisma = new PrismaClient();
 const app = express();
 app.use(express.json());
 
+startHaSyncWorker(2000); 
 // ---- ENV ----
 const PORT = Number(process.env.PORT || 4000);
 const EDGE_ID = process.env.EDGE_ID || 'edge_local';

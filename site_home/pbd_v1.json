@@ -1,0 +1,53 @@
+{
+  "global": {
+    "units": "meters",
+    "upAxis": "Y",
+    "wallThickness": 0.2,
+    "ceilingHeight": 2.8,
+    "materialPalette": {}
+  },
+  "levels": [
+    { "levelIndex": 1, "name": "L1", "elevation": 0.0 },
+    { "levelIndex": 2, "name": "L2", "elevation": 3.6 }
+  ],
+  "rooms": [
+    {
+      "code": "living",
+      "name": "Living Room",
+      "level": 1,
+      "polygon": [[0,0],[5,0],[5,4],[0,4]],
+      "height": 2.8
+    },
+    {
+      "code": "kitchen",
+      "name": "Kitchen",
+      "level": 1,
+      "polygon": [[5,0],[8,0],[8,4],[5,4]],
+      "height": 2.8
+    },
+    {
+      "code": "bed1",
+      "name": "Bedroom",
+      "level": 1,
+      "polygon": [[0,4],[4,4],[4,7],[0,7]],
+      "height": 2.8
+    },
+    {
+      "code": "bath",
+      "name": "Bathroom",
+      "level": 1,
+      "polygon": [[4,4],[8,4],[8,7],[4,7]],
+      "height": 2.8
+    }
+  ],
+  "openings": [],
+  "anchors": [
+    { "deviceKey": "DEV_lr_temp_1",  "type": "temp",     "roomCode": "living", "x": 2.5, "y": 2.0, "z": 1.5 },
+    { "deviceKey": "DEV_lr_light_1", "type": "light",    "roomCode": "living", "x": 2.5, "y": 2.0, "z": 2.6 },
+    { "deviceKey": "DEV_kit_hum_1",  "type": "humidity", "roomCode": "kitchen","x": 6.5, "y": 2.0, "z": 1.5 },
+    { "deviceKey": "DEV_bed_co2_1",  "type": "co2",      "roomCode": "bed1",   "x": 2.0, "y": 5.5, "z": 1.5 },
+    { "deviceKey": "DEV_bath_leak_1","type": "leak",     "roomCode": "bath",   "x": 6.0, "y": 5.5, "z": 0.1 }
+  ],
+  "version": 1,
+  "hash": ""
+}

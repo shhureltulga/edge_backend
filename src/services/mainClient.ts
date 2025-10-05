@@ -1,99 +1,142 @@
+// src/services/mainClient.ts
 import axios from 'axios';
-import { makeSignature } from '../lib/hmac';
+import { createHash, createHmac } from 'crypto';
 
-const MAIN_BASE_URL = process.env.MAIN_BASE_URL || 'http://localhost:5000';
-const EDGE_ID = process.env.EDGE_ID || 'edge_local';
-const HOUSEHOLD_ID = process.env.HOUSEHOLD_ID || '';
-const EDGE_SHARED_SECRET = process.env.EDGE_SHARED_SECRET || 'dev_secret';
+/**
+ * BASE: Main-ын үндсэн URL (ж: https://api.habea.mn)
+ * PREFIX: Зөвхөн URL дээр ашиглана (default: /edgehooks) — HMAC-д ОРОХГҮЙ
+ */
+const BASE   = (process.env.MAIN_BASE_URL || 'https://api.habea.mn').replace(/\/+$/, '');
+const PREFIX = (process.env.EDGEHOOKS_PREFIX || '/edgehooks').replace(/\/+$/, '');
 
-// ⬇️ axios instance
-const http = axios.create({
-  baseURL: MAIN_BASE_URL.replace(/\/+$/, ''), // trailing slash арилгана
-  timeout: 10000,
-  headers: { 'content-type': 'application/json' },
-});
+const EDGE_ID       = process.env.EDGE_ID || 'edge_local';
+const HOUSEHOLD_ID  = process.env.HOUSEHOLD_ID || '';
+const SITE_ID       = process.env.SITE_ID || '';
+const SECRET        = process.env.EDGE_SHARED_SECRET || 'change-this-very-strong';
 
-// ⬇️ request interceptor: signature-аа үргэлж ижил аргаар барина
-http.interceptors.request.use((config) => {
-  const method = (config.method || 'GET').toUpperCase();
+const HTTP_TIMEOUT_MS = 10_000;
 
-  // URL-ийн зөв path-ыг гаргаж авах (baseURL + url → pathname)
-  const full = new URL((config.url || ''), (config.baseURL || 'http://x') + '/');
-  const path = full.pathname; // ж: "/edge/heartbeat"
+/* -------------------------- дотоод туслахууд -------------------------- */
 
-  // Body-г ТОДОРХОЙ JSON string болгоно (axios өөрөө stringify хийдэг ч signature-д бид тогтмол string ашиглана)
-  const bodyStr =
-    config.data == null
-      ? ''
-      : typeof config.data === 'string'
-      ? config.data
-      : JSON.stringify(config.data);
+function urlFor(path: string) {
+  // path ж: '/edge/heartbeat' — prefix зөвхөн URL-д
+  return `${BASE}${PREFIX}${path}`;
+}
 
-  // ⬇️ TS-ийн нэгж: ихэнх backend секунд хэрэглэдэг. Хэрвээ танай Main миллисекунд хүлээдэг бол tsMs ашиглаад сольж болно.
-//   const tsSec = Math.floor(Date.now() / 1000).toString();
-const tsMs = Date.now().toString();           // ✅ millis
-const sig = makeSignature(method, path, tsMs, bodyStr, EDGE_SHARED_SECRET);
-//   const sig = makeSignature(method, path, tsSec, bodyStr, EDGE_SHARED_SECRET);
+/** server-ын verifyHmac-тэй адил serialize:
+ * - string бол тэр чигт нь
+ * - бусад үед JSON.stringify(body ?? {})
+ */
+function serializeBody(body: unknown): string {
+  return typeof body === 'string' ? body : JSON.stringify(body ?? {});
+}
 
-  // AxiosHeaders ашиглан тавих (типийн алдаанаас сэргийлнэ)
-  config.headers.set?.('x-edge-id', EDGE_ID);
-  config.headers.set?.('x-household-id', HOUSEHOLD_ID);
-  config.headers.set?.('x-timestamp', tsMs);
-  config.headers.set?.('x-signature', sig);
-  config.headers.set?.('content-type', 'application/json');
+/** HMAC sign format:
+ *   METHOD|path|timestamp|sha256(bodyStr)
+ *  - path: зөвхөн router path (ж: '/edge/heartbeat'), PREFIX ОРОХГҮЙ
+ *  - timestamp: секундээр (string)
+ */
+function makeSignature(method: string, path: string, body: unknown) {
+  const ts = String(Math.floor(Date.now() / 1000));
+  const bodyStr = serializeBody(body);
+  const bodySha = createHash('sha256').update(bodyStr).digest('hex');
+  const base    = `${method.toUpperCase()}|${path}|${ts}|${bodySha}`;
+  const sig     = createHmac('sha256', SECRET).update(base).digest('hex');
+  return { ts, sig, bodyStr };
+}
 
-  return config;
-});
+/** Нэг төрлийн header-уудыг үүсгэнэ */
+function signedHeaders(edgeId: string, ts: string, sig: string, contentType?: string) {
+  const h: Record<string, string> = {
+    'x-edge-id': edgeId,
+    'x-timestamp': ts,
+    'x-signature': sig,
+  };
+  if (contentType) h['content-type'] = contentType;
+  return h;
+}
 
-// (сонголт) main-ийн хариуг логлож оношилгоо амар болгоё
-http.interceptors.response.use(
-  (r) => {
-    console.log('MAIN RESP', r.status, r.config.method?.toUpperCase(), r.config.url);
-    return r;
-  },
-  (e) => {
-    console.error(
-      'MAIN ERR',
-      e.response?.status,
-      e.config?.method?.toUpperCase(),
-      e.config?.url,
-      e.response?.data || String(e)
-    );
-    return Promise.reject(e);
-  }
-);
+/* ------------------------------ API-ууд ------------------------------- */
 
-export async function pushReadings(batch: Array<{ deviceKey: string; type: string; value: number; ts?: string | Date }>) {
+/** ---- Heartbeat ---- */
+export async function heartbeat(status: 'online' | 'offline' = 'online') {
+  const path = '/edge/heartbeat';
+  const url  = urlFor(path);
+
   const payload = {
     householdId: HOUSEHOLD_ID,
+    siteId: SITE_ID,
     edgeId: EDGE_ID,
-    readings: batch.map((r) => ({
-      deviceKey: r.deviceKey,
-      type: r.type,
-      value: Number(r.value),
-      ts: r.ts ? new Date(r.ts) : new Date(),
-    })),
+    status,
   };
-  await http.post('/edge/ingest', payload);
-}
 
-export async function heartbeat(status: 'online' | 'offline' = 'online') {
-  await http.post('/edge/heartbeat', { householdId: HOUSEHOLD_ID, edgeId: EDGE_ID, status });
-}
+  const { ts, sig, bodyStr } = makeSignature('POST', path, payload);
 
-export async function fetchCommands(since?: string) {
-  const { data } = await http.get('/edge/commands', {
-    params: { householdId: HOUSEHOLD_ID, edgeId: EDGE_ID, since },
+  // Axios-д яг SIGN-д ашигласан bodyStr-ээ шууд дамжуулж илгээнэ
+  return axios.post(url, bodyStr, {
+    headers: signedHeaders(EDGE_ID, ts, sig, 'application/json'),
+    timeout: HTTP_TIMEOUT_MS,
+    // validateStatus: () => true, // Хэрэв 4xx/5xx дээр throw хийхийг хүсэхгүй бол нээ
   });
-  return data?.commands ?? [];
 }
 
-export async function ackCommand(cmdId: string, ok: boolean, error?: string) {
-  await http.post('/edge/commands/ack', {
+/** ---- Readings ingest ---- */
+type Reading = { deviceKey: string; type: string; value: number; ts?: string | Date };
+
+export async function pushReadings(readings: Reading[]) {
+  const path = '/edge/ingest';
+  const url  = urlFor(path);
+
+  const payload = {
     householdId: HOUSEHOLD_ID,
+    siteId: SITE_ID,
     edgeId: EDGE_ID,
-    commandId: cmdId,
+    readings,
+  };
+
+  const { ts, sig, bodyStr } = makeSignature('POST', path, payload);
+
+  return axios.post(url, bodyStr, {
+    headers: signedHeaders(EDGE_ID, ts, sig, 'application/json'),
+    timeout: HTTP_TIMEOUT_MS,
+  });
+}
+
+/** ---- Commands татах (GET) ---- */
+export async function fetchCommands(): Promise<Array<{ id: string; payload: any }>> {
+  const path = '/edge/commands';
+  const url  = urlFor(path);
+
+  // GET үед body-г {} гэж үзэж sign хийдэг (server талын verifyHmac-тэй таарна)
+  const { ts, sig } = makeSignature('GET', path, {});
+
+  const res = await axios.get(url, {
+    headers: signedHeaders(EDGE_ID, ts, sig),
+    timeout: HTTP_TIMEOUT_MS,
+  });
+
+  // 2xx биш үед axios throw хийнэ; шаардвал validateStatus дээр өөрчилж болно
+  return res.data?.commands ?? [];
+}
+
+/** ---- Commands ACK ---- */
+export async function ackCommand(commandId: string, ok: boolean, error?: string) {
+  const path = '/edge/commands/ack';
+  const url  = urlFor(path);
+
+  const payload = {
+    commandId,
     status: ok ? 'acked' : 'failed',
-    error,
+    error: error ?? null,
+    edgeId: EDGE_ID,
+    householdId: HOUSEHOLD_ID,
+    siteId: SITE_ID, // сонголттой; main тал FK шалгалтад ашиглаж болно
+  };
+
+  const { ts, sig, bodyStr } = makeSignature('POST', path, payload);
+
+  return axios.post(url, bodyStr, {
+    headers: signedHeaders(EDGE_ID, ts, sig, 'application/json'),
+    timeout: HTTP_TIMEOUT_MS,
   });
 }

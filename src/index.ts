@@ -29,6 +29,7 @@ const toReadingType = (t: string): ReadingType => {
     : ReadingType.custom;
 };
 
+
 // ---- Healthcheck ----
 app.get('/health', async (_req, res) => {
   try {

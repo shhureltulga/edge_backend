@@ -1,0 +1,135 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.startCommandPoller = startCommandPoller;
+const axios_1 = __importDefault(require("axios"));
+const hmac_1 = require("../utils/hmac");
+const executeCommand_1 = require("./executeCommand");
+const prisma_1 = require("../lib/prisma");
+const client_1 = require("@prisma/client");
+function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+}
+async function startCommandPoller() {
+    const baseUrl = process.env.MAIN_BASE_URL?.replace(/\/$/, '');
+    const edgeId = process.env.EDGE_ID;
+    if (!baseUrl || !edgeId)
+        throw new Error('Missing env: MAIN_BASE_URL or EDGE_ID');
+    let since = new Date(0).toISOString();
+    let backoff = 1000;
+    while (true) {
+        // ✅ HMAC-д ОРОХ path (mount prefix-гүй)
+        const pathForSig = '/edge/commands';
+        // ✅ Жинхэнэ URL (mount prefix-тэй)
+        const url = `${baseUrl}/edgehooks${pathForSig}`;
+        const params = { edgeId, since, siteId: process.env.SITE_ID }; // siteId-ыг сервер нэхдэг бол нэм
+        const headers = (0, hmac_1.createHmacHeaders)('GET', pathForSig, params); // ✅ pathForSig-ийг ашиглана
+        try {
+            const res = await axios_1.default.get(url, { headers, params, timeout: 20000 });
+            console.log('[poll] raw:', res.status, JSON.stringify(res.data));
+            const data = res.data;
+            const items = (data.items ?? data.commands ?? []);
+            const serverTime = data.serverTime ?? new Date().toISOString();
+            console.log('[poll] raw:', res.status, JSON.stringify(data));
+            console.log('[poll] got', items.length, 'items');
+            if (items.length)
+                console.log('[poll] got', items.length, 'items');
+            for (const item of items) {
+                console.log('[command]', item);
+                // type/deviceKey-ийг item эсвэл item.payload-оос гаргаж авна (DB-д хадгалахгүй)
+                const p = item.payload ?? item;
+                const type = p.type ?? item.type;
+                const deviceKey = p.deviceKey ?? item.deviceKey;
+                // ⬇⬇⬇ ЭНЭ 3 мөрийг ЭНД НЭМНЭ ⬇⬇⬇
+                if (!item.id || !type || !deviceKey) {
+                    console.warn('[poll] skip: missing id/type/deviceKey', item);
+                    continue;
+                }
+                // === ЛОКАЛ INBOX (payload-only, идемпотент) ===
+                const existing = await prisma_1.prisma.edgeCommand.findFirst({
+                    where: { correlationId: item.id },
+                });
+                if (!existing) {
+                    await prisma_1.prisma.edgeCommand.create({
+                        data: {
+                            correlationId: item.id,
+                            type, // ✅ REQUIRED талбар — заавал өг
+                            deviceKey,
+                            payload: item, // 👈 зөвхөн payload хадгална
+                            status: client_1.EdgeCmdStatus.queued,
+                        },
+                    });
+                }
+                else {
+                    await prisma_1.prisma.edgeCommand.update({
+                        where: { id: existing.id },
+                        data: {
+                            type: { set: type }, // ✅ schema-д required тул sync-лэе
+                            deviceKey: { set: deviceKey }, // ✅
+                            payload: item,
+                            status: { set: client_1.EdgeCmdStatus.queued },
+                        },
+                    });
+                }
+                // === PROCESS ===
+                let ok = false;
+                const row = await prisma_1.prisma.edgeCommand.findFirst({ where: { correlationId: item.id } });
+                if (row) {
+                    await prisma_1.prisma.edgeCommand.update({
+                        where: { id: row.id },
+                        data: { status: { set: client_1.EdgeCmdStatus.processing } },
+                    });
+                }
+                try {
+                    await (0, executeCommand_1.executeCommand)({ id: item.id, type, deviceKey, ...p });
+                    if (row) {
+                        await prisma_1.prisma.edgeCommand.update({
+                            where: { id: row.id },
+                            data: { status: { set: client_1.EdgeCmdStatus.done }, processedAt: new Date() },
+                        });
+                    }
+                    ok = true;
+                }
+                catch (err) {
+                    console.error('[execute error]', err?.message || String(err));
+                    if (row) {
+                        await prisma_1.prisma.edgeCommand.update({
+                            where: { id: row.id },
+                            data: { status: { set: client_1.EdgeCmdStatus.processing }, error: String(err) },
+                        });
+                    }
+                }
+                // === ACK (амжилттай үед) ===
+                if (ok) {
+                    const ackPath = '/edge/commands/ack';
+                    const ackUrl = `${baseUrl}/edgehooks${ackPath}`;
+                    const ackBody = { commandId: item.id, status: 'acked' }; // амжилттай бол 'acked'
+                    const ackHeaders = (0, hmac_1.createHmacHeaders)('POST', ackPath, ackBody);
+                    try {
+                        const ackRes = await axios_1.default.post(ackUrl, ackBody, { headers: ackHeaders, timeout: 10000 });
+                        console.log('[ack ok]', item.id, ackRes.status, JSON.stringify(ackRes.data));
+                    }
+                    catch (ae) {
+                        console.error('[ack error]', item.id, ae?.response?.status, ae?.response?.data || ae?.message);
+                    }
+                }
+            }
+            since = serverTime;
+            backoff = 1000; // reset
+        }
+        catch (e) {
+            console.error('[poll error]', e?.response?.data || e?.message);
+            backoff = Math.min(backoff * 2, 30000);
+        }
+        await sleep(backoff);
+    }
+}
+if (require.main === module) {
+    console.log('[poller] starting…');
+    startCommandPoller().catch((err) => {
+        console.error('[poller fatal]', err?.response?.data || err?.message || err);
+        process.exit(1);
+    });
+}

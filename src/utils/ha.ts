@@ -164,3 +164,40 @@ export async function ensureAreaByName(name: string): Promise<HaArea> {
   const found = await findAreaByName(name);
   return found ?? (await createArea(name));
 }
+
+/* --------------------- Devices API wrappers --------------------- */
+
+// Home Assistant device registry-н бичлэгийн хамгийн хэрэгтэй талбарууд
+export interface HaDevice {
+  id: string;
+  name_by_user?: string | null;
+  area_id?: string | null;
+  identifiers: Array<[string, string]>; // ж: [['habea', 'edge_nas_01:lr_temp_1']]
+  [k: string]: unknown;
+}
+
+// Бүх device-үүдийг татна
+export const listDevices = async (): Promise<HaDevice[]> =>
+  call<HaDevice[]>('config/device_registry/list');
+
+// Тухайн төхөөрөмжийг area-д оноох (area_id=null хийвэл area-гаас салгана)
+export const assignDeviceToArea = async (device_id: string, area_id: string | null) =>
+  call('config/device_registry/update', { device_id, area_id });
+
+// Төхөөрөмжийг identifiers-ээр нь хайх.
+// Бид 2 хэлбэрийг шалгана:
+//   1) ['habea', deviceKey]
+//   2) ['habea', `${edgeId}:${deviceKey}`]   // хэрэв edgeId-г identifiers-д хавсаргадаг бол
+export async function findHaDeviceIdByKey(deviceKey: string, edgeId?: string): Promise<string | null> {
+  const devices = await listDevices();
+  for (const d of devices) {
+    if (!Array.isArray(d.identifiers)) continue;
+    const hasSimple = d.identifiers.some(([dom, id]) => dom === 'habea' && id === deviceKey);
+    const hasWithEdge = edgeId
+      ? d.identifiers.some(([dom, id]) => dom === 'habea' && id === `${edgeId}:${deviceKey}`)
+      : false;
+
+    if (hasSimple || hasWithEdge) return d.id;
+  }
+  return null;
+}

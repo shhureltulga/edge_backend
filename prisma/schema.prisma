@@ -153,15 +153,19 @@ model EdgeSyncLog {
 /**
  * Main-ээс ирэх командын inbox
  */
+
 model EdgeCommand {
   id            String        @id @default(uuid())
+  correlationId String?
+  type          String // ← нэмсэн
+  deviceKey     String // ← нэмсэн
   payload       Json
   status        EdgeCmdStatus @default(queued)
   error         String?
   createdAt     DateTime      @default(now())
   processedAt   DateTime?
-  correlationId String? // main талын command id тайлбарлахад
 
   @@index([status, createdAt])
+  @@index([deviceKey])
   @@index([correlationId])
 }

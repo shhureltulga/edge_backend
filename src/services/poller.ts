@@ -46,17 +46,35 @@ export async function startCommandPoller(): Promise<void> {
       for (const item of items) {
         console.log('[command]', item);
 
-        // type/deviceKey-ийг item эсвэл item.payload-оос гаргаж авна (DB-д хадгалахгүй)
-        const p = (item as any).payload ?? (item as any);
-        const type: string | undefined = p.type ?? (item as any).type;
-        const deviceKey: string | undefined = p.deviceKey ?? (item as any).deviceKey;
+  // ✅ Payload-ийг илүү найдвартай ялгаж авна
+  const payload = item.payload ?? item;
 
- 
-          // ⬇⬇⬇ ЭНЭ 3 мөрийг ЭНД НЭМНЭ ⬇⬇⬇
-          if (!item.id || !type || !deviceKey) {
-            console.warn('[poll] skip: missing id/type/deviceKey', item);
-            continue;
-          }
+  // ✅ Type болон deviceKey-г payload эсвэл fallback-оос онооно
+  const type: string | undefined = payload.type ?? payload.op;
+  let deviceKey: string | undefined = payload.deviceKey;
+
+  // ✅ fallback: room.id-аар deviceKey үүсгэнэ
+  if (!deviceKey && payload.room?.id) {
+    deviceKey = `room_${payload.room.id}`;
+  }
+
+  // ✅ skip нөхцөл
+  if (!item.id || !type || !deviceKey) {
+    console.warn('[poll] skip: missing id/type/deviceKey', {
+      id: item.id,
+      type,
+      deviceKey,
+      payload,
+    });
+    continue;
+  }
+
+        if (!item.id || !type || !deviceKey) {
+          console.warn('[poll] skip: missing id/type/deviceKey', item);
+          continue;
+        }
+
+
         // === ЛОКАЛ INBOX (payload-only, идемпотент) ===
         const existing = await prisma.edgeCommand.findFirst({
           where: { correlationId: item.id },
@@ -95,7 +113,7 @@ export async function startCommandPoller(): Promise<void> {
         }
 
         try {
-          await executeCommand({ id: item.id, type, deviceKey, ...p });
+          await executeCommand({ id: item.id, type, deviceKey, ...payload });
 
           if (row) {
             await prisma.edgeCommand.update({

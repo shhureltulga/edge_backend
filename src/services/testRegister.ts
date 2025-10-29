@@ -2,7 +2,7 @@
 import { registerDeviceToMain } from '../services/deviceRegister';
 
 registerDeviceToMain({
-  deviceKey: 'lr_temp_2',
+  deviceKey: 'lr_temp_3',
   siteId: '2f434df4-87ef-4245-a956-024da2da5a10',
   name: 'Living Temp',
   type: 'sensor',

@@ -17,6 +17,12 @@ export interface HaArea {
   name: string;
   [k: string]: unknown;
 }
+// --- Floor types ---
+export interface HaFloor {
+  floor_id: string;
+  name: string;
+  [k: string]: unknown;
+}
 
 // --- WS singleton ---
 let ws: WebSocket | null = null;
@@ -164,6 +170,37 @@ export async function ensureAreaByName(name: string): Promise<HaArea> {
   const found = await findAreaByName(name);
   return found ?? (await createArea(name));
 }
+
+/* --------------------- Floors API wrappers --------------------- */
+export const listFloors = async (): Promise<HaFloor[]> =>
+  call<HaFloor[]>('config/floor_registry/list');
+
+export const createFloor = async (name: string): Promise<HaFloor> =>
+  call<HaFloor>('config/floor_registry/create', { name });
+
+export const updateFloor = async (floor_id: string, patch: Record<string, unknown>): Promise<HaFloor> =>
+  call<HaFloor>('config/floor_registry/update', { floor_id, ...patch });
+
+export const deleteFloor = async (floor_id: string): Promise<boolean> =>
+  call<boolean>('config/floor_registry/delete', { floor_id });
+
+export async function findFloorByName(name: string): Promise<HaFloor | null> {
+  const floors = await listFloors();
+  const key = name.trim().toLowerCase();
+  return floors.find(f => (f.name || '').toString().trim().toLowerCase() === key) || null;
+}
+
+export async function ensureFloorByName(name: string): Promise<HaFloor> {
+  const found = await findFloorByName(name);
+  return found ?? (await createFloor(name));
+}
+
+// ⬇️ Area-г давхарт оноох (optional)
+export async function assignAreaToFloor(area_id: string, floor_id: string | null) {
+  // floor_id=null → салгах
+  return updateArea(area_id, floor_id ? { floor_id } as any : { floor_id: null } as any);
+}
+
 
 /* --------------------- Devices API wrappers --------------------- */
 

@@ -51,7 +51,13 @@ export function createHmacHeaders(method: string, path: string, _signPayload?: a
   const signature = crypto.createHmac('sha256', EDGE_SHARED_SECRET!).update(base).digest('hex');
 
   if (DEBUG_HMAC) console.log('[HMAC]', { method: upper, path, ts, raw, bodyHash, base, signature });
-
+  console.log('[EDGE HMAC] method=', upper);
+  console.log('[EDGE HMAC] path  =', path);
+  console.log('[EDGE HMAC] ts    =', ts);
+  console.log('[EDGE HMAC] body  =', raw);        // ← одоо raw JSON
+  console.log('[EDGE HMAC] bodySha=', bodyHash);  // ← жинхэнэ sha256
+  console.log('[EDGE HMAC] base  =', base);
+  console.log('[EDGE HMAC] sig   =', signature);
   return {
     'x-edge-id': process.env.EDGE_ID!,
     'x-household-id': process.env.HOUSEHOLD_ID!,

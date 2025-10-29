@@ -72,11 +72,10 @@ export async function heartbeat(status: 'online' | 'offline' = 'online') {
 
   const { ts, sig, bodyStr } = makeSignature('POST', path, payload);
 
-  // Axios-д яг SIGN-д ашигласан bodyStr-ээ шууд дамжуулж илгээнэ
   return axios.post(url, bodyStr, {
     headers: signedHeaders(EDGE_ID, ts, sig, 'application/json'),
     timeout: HTTP_TIMEOUT_MS,
-    // validateStatus: () => true, // Хэрэв 4xx/5xx дээр throw хийхийг хүсэхгүй бол нээ
+    // validateStatus: () => true,
   });
 }
 
@@ -115,27 +114,47 @@ export async function fetchCommands(): Promise<Array<{ id: string; payload: any 
     timeout: HTTP_TIMEOUT_MS,
   });
 
-  // 2xx биш үед axios throw хийнэ; шаардвал validateStatus дээр өөрчилж болно
   return res.data?.commands ?? [];
 }
 
 /** ---- Commands ACK ---- */
-export async function ackCommand(commandId: string, ok: boolean, error?: string) {
+/* Overload-ууд: 2, 3, 4 аргумент дэмжинэ */
+export function ackCommand(commandId: string, ok: boolean): Promise<void>;
+export function ackCommand(commandId: string, ok: boolean, error?: string): Promise<void>;
+export function ackCommand(
+  commandId: string,
+  ok: boolean,
+  error?: string,
+  meta?: Record<string, any>
+): Promise<void>;
+
+/* Нэг implementation (хамгийн өргөн signature) */
+export async function ackCommand(
+  commandId: string,
+  ok: boolean,
+  error?: string,
+  meta?: Record<string, any>
+): Promise<void> {
   const path = '/edge/commands/ack';
   const url  = urlFor(path);
 
-  const payload = {
+  const payload: any = {
     commandId,
     status: ok ? 'acked' : 'failed',
-    error: error ?? null,
     edgeId: EDGE_ID,
     householdId: HOUSEHOLD_ID,
-    siteId: SITE_ID, // сонголттой; main тал FK шалгалтад ашиглаж болно
+    siteId: SITE_ID,
   };
+
+  // error талбарыг тодорхой утгатай үед л оруулна (HMAC яг энэ payload-аар гарна)
+  if (error !== undefined) payload.error = error;
+  if (meta) payload.meta = meta; // ← META-г ACK боди руу шингээв
 
   const { ts, sig, bodyStr } = makeSignature('POST', path, payload);
 
-  return axios.post(url, bodyStr, {
+  console.log('[ACK -> main] body =', bodyStr);
+  
+  await axios.post(url, bodyStr, {
     headers: signedHeaders(EDGE_ID, ts, sig, 'application/json'),
     timeout: HTTP_TIMEOUT_MS,
   });

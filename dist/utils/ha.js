@@ -3,9 +3,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteArea = exports.updateArea = exports.createArea = exports.listAreas = void 0;
+exports.assignDeviceToArea = exports.listDevices = exports.deleteFloor = exports.updateFloor = exports.createFloor = exports.listFloors = exports.deleteArea = exports.updateArea = exports.createArea = exports.listAreas = void 0;
 exports.findAreaByName = findAreaByName;
 exports.ensureAreaByName = ensureAreaByName;
+exports.findFloorByName = findFloorByName;
+exports.ensureFloorByName = ensureFloorByName;
+exports.assignAreaToFloor = assignAreaToFloor;
+exports.findHaDeviceIdByKey = findHaDeviceIdByKey;
 // src/utils/ha.ts
 const ws_1 = __importDefault(require("ws"));
 // --- ENV (dotenv/config-ийг entry дээрээ import хийсэн байх) ---
@@ -138,4 +142,51 @@ async function findAreaByName(name) {
 async function ensureAreaByName(name) {
     const found = await findAreaByName(name);
     return found ?? (await (0, exports.createArea)(name));
+}
+/* --------------------- Floors API wrappers --------------------- */
+const listFloors = async () => call('config/floor_registry/list');
+exports.listFloors = listFloors;
+const createFloor = async (name) => call('config/floor_registry/create', { name });
+exports.createFloor = createFloor;
+const updateFloor = async (floor_id, patch) => call('config/floor_registry/update', { floor_id, ...patch });
+exports.updateFloor = updateFloor;
+const deleteFloor = async (floor_id) => call('config/floor_registry/delete', { floor_id });
+exports.deleteFloor = deleteFloor;
+async function findFloorByName(name) {
+    const floors = await (0, exports.listFloors)();
+    const key = name.trim().toLowerCase();
+    return floors.find(f => (f.name || '').toString().trim().toLowerCase() === key) || null;
+}
+async function ensureFloorByName(name) {
+    const found = await findFloorByName(name);
+    return found ?? (await (0, exports.createFloor)(name));
+}
+// ⬇️ Area-г давхарт оноох (optional)
+async function assignAreaToFloor(area_id, floor_id) {
+    // floor_id=null → салгах
+    return (0, exports.updateArea)(area_id, floor_id ? { floor_id } : { floor_id: null });
+}
+// Бүх device-үүдийг татна
+const listDevices = async () => call('config/device_registry/list');
+exports.listDevices = listDevices;
+// Тухайн төхөөрөмжийг area-д оноох (area_id=null хийвэл area-гаас салгана)
+const assignDeviceToArea = async (device_id, area_id) => call('config/device_registry/update', { device_id, area_id });
+exports.assignDeviceToArea = assignDeviceToArea;
+// Төхөөрөмжийг identifiers-ээр нь хайх.
+// Бид 2 хэлбэрийг шалгана:
+//   1) ['habea', deviceKey]
+//   2) ['habea', `${edgeId}:${deviceKey}`]   // хэрэв edgeId-г identifiers-д хавсаргадаг бол
+async function findHaDeviceIdByKey(deviceKey, edgeId) {
+    const devices = await (0, exports.listDevices)();
+    for (const d of devices) {
+        if (!Array.isArray(d.identifiers))
+            continue;
+        const hasSimple = d.identifiers.some(([dom, id]) => dom === 'habea' && id === deviceKey);
+        const hasWithEdge = edgeId
+            ? d.identifiers.some(([dom, id]) => dom === 'habea' && id === `${edgeId}:${deviceKey}`)
+            : false;
+        if (hasSimple || hasWithEdge)
+            return d.id;
+    }
+    return null;
 }

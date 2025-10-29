@@ -12,30 +12,39 @@ type EdgeCommand = {
   payload: any;
 };
 
-async function handleCommand(c: EdgeCommand) {
+export async function handleCommand(c: EdgeCommand) {
   let status: 'acked' | 'failed' = 'acked';
   let error: string | null = null;
+  let meta: Record<string, any> | undefined; // ← ACK-д дагуулж буцах мэдээлэл
 
   try {
     const p = c.payload || {};
     const op = p?.op as string | undefined;
 
     // Нийтлэг талбарууд
-    const roomName = p?.room?.name as string | undefined; // ensure/delete fallback
+    const roomId   = p?.room?.id as string | undefined;
+    const roomName = p?.room?.name as string | undefined;
     const haAreaId = (p?.haAreaId || p?.areaId) as string | undefined;
 
     switch (op) {
       case 'ha.area.ensure': {
         if (!roomName) throw new Error('missing room.name');
-        await ensureAreaByName(roomName);
+
+        // HA талд тухайн нэртэй area-г баталгаажуулж, area_id буцаана
+        const haArea = await ensureAreaByName(roomName);
+
+        // ACK-д дагуулж буцах meta: MAIN тал үүнийг авч room.haAreaId-г update хийнэ
+        meta = {
+          haAreaId: haArea.area_id,
+          haAreaName: haArea.name ?? roomName,
+          roomId: roomId ?? null,
+        };
         break;
       }
 
       case 'ha.area.rename': {
-        // main-аас ирэх шинэ талбарууд
         const fromName = p?.fromName as string | undefined;
         const toName = (p?.toName as string | undefined) ?? roomName;
-
         if (!toName) throw new Error('missing toName');
 
         // 1) area_id өгөгдвөл шууд rename
@@ -53,8 +62,7 @@ async function handleCommand(c: EdgeCommand) {
           }
         }
 
-        // 3) fallback: toName өөрөө байхгүй бол шинээр үүсгэе,
-        //    байгаад нэр нь яг ижил байвал юу ч хийхгүй.
+        // 3) fallback: toName байхгүй бол шинэчил
         const exists = await findAreaByName(toName);
         if (!exists) {
           await ensureAreaByName(toName);
@@ -89,8 +97,9 @@ async function handleCommand(c: EdgeCommand) {
     error = e?.message || String(e);
   }
 
+  // ACK: статус + (байвал) meta-г дагуулж буцаана
   try {
-    await ackCommand(c.id, status === 'acked', error ?? undefined);
+    await ackCommand(c.id, status === 'acked', error ?? undefined, meta);
   } catch {
     // чимээгүй — дараагийн polling дээр дахин оролдоно
   }

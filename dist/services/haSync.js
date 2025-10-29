@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.handleCommand = handleCommand;
 exports.startHaSyncWorker = startHaSyncWorker;
 // src/services/haSync.ts
 const mainClient_1 = require("./mainClient");
@@ -7,21 +8,29 @@ const ha_1 = require("../utils/ha");
 async function handleCommand(c) {
     let status = 'acked';
     let error = null;
+    let meta; // ← ACK-д дагуулж буцах мэдээлэл
     try {
         const p = c.payload || {};
         const op = p?.op;
         // Нийтлэг талбарууд
-        const roomName = p?.room?.name; // ensure/delete fallback
+        const roomId = p?.room?.id;
+        const roomName = p?.room?.name;
         const haAreaId = (p?.haAreaId || p?.areaId);
         switch (op) {
             case 'ha.area.ensure': {
                 if (!roomName)
                     throw new Error('missing room.name');
-                await (0, ha_1.ensureAreaByName)(roomName);
+                // HA талд тухайн нэртэй area-г баталгаажуулж, area_id буцаана
+                const haArea = await (0, ha_1.ensureAreaByName)(roomName);
+                // ACK-д дагуулж буцах meta: MAIN тал үүнийг авч room.haAreaId-г update хийнэ
+                meta = {
+                    haAreaId: haArea.area_id,
+                    haAreaName: haArea.name ?? roomName,
+                    roomId: roomId ?? null,
+                };
                 break;
             }
             case 'ha.area.rename': {
-                // main-аас ирэх шинэ талбарууд
                 const fromName = p?.fromName;
                 const toName = p?.toName ?? roomName;
                 if (!toName)
@@ -39,8 +48,7 @@ async function handleCommand(c) {
                         break;
                     }
                 }
-                // 3) fallback: toName өөрөө байхгүй бол шинээр үүсгэе,
-                //    байгаад нэр нь яг ижил байвал юу ч хийхгүй.
+                // 3) fallback: toName байхгүй бол шинэчил
                 const exists = await (0, ha_1.findAreaByName)(toName);
                 if (!exists) {
                     await (0, ha_1.ensureAreaByName)(toName);
@@ -73,8 +81,9 @@ async function handleCommand(c) {
         status = 'failed';
         error = e?.message || String(e);
     }
+    // ACK: статус + (байвал) meta-г дагуулж буцаана
     try {
-        await (0, mainClient_1.ackCommand)(c.id, status === 'acked', error ?? undefined);
+        await (0, mainClient_1.ackCommand)(c.id, status === 'acked', error ?? undefined, meta);
     }
     catch {
         // чимээгүй — дараагийн polling дээр дахин оролдоно
